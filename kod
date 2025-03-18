@@ -1,0 +1,123 @@
+#include <Arduino.h>
+#include <IRremote.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define OLED_WIDTH 128
+#define OLED_HEIGHT 64
+#define IR_PIN 12
+#define BUTTON_PIN 26
+#define IR_SEND_PIN 15
+#define ENCODER_CLK 32
+#define ENCODER_DT 33
+#define ENCODER_SW 25
+
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+
+const int maxReadings = 10;
+int irReadings[maxReadings];
+int readingIndex = 0;
+int selectedSignal = 0;
+int lastEncoderState = HIGH;
+
+void setup() {
+  Serial.begin(115200);
+  
+  // IR alıcı ve verici başlat
+  IrReceiver.begin(IR_PIN, ENABLE_LED_FEEDBACK);
+  IrSender.begin(IR_SEND_PIN);
+
+  // OLED ekran başlat
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED baslatilamadi!");
+    for (;;);
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 0);
+  display.println("IR ALICI HAZIR!");
+  display.display();
+
+  // Buton ve encoder pin ayarı
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(ENCODER_CLK, INPUT);
+  pinMode(ENCODER_DT, INPUT);
+  pinMode(ENCODER_SW, INPUT_PULLUP);
+
+  // Dizi başlat
+  for (int i = 0; i < maxReadings; i++) {
+    irReadings[i] = 0;
+  }
+}
+
+bool isDuplicate(int value) {
+  for (int i = 0; i < maxReadings; i++) {
+    if (irReadings[i] == value) return true;
+  }
+  return false;
+}
+
+bool isStrongSignal(int value) {
+  return value > 1000; // Güçlü sinyal filtresi
+}
+
+void showSignalList() {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println("Kayitli Sinyaller:");
+  for (int i = 0; i < maxReadings; i++) {
+    if (irReadings[i] != 0) {
+      if (i == selectedSignal) display.print("> ");
+      else display.print("  ");
+      display.println("Sinyal " + String(i + 1));
+    }
+  }
+  display.display();
+}
+
+void loop() {
+  // IR sinyalini kontrol et
+  if (IrReceiver.decode()) {
+    int irValue = IrReceiver.decodedIRData.decodedRawData;
+    // Sinyali Seri Monitör'e yazdır
+    Serial.print("Okunan Sinyal: ");
+    Serial.println(irValue, HEX);
+    
+    // Gürültü filtresi: 0, zayıf veya tekrarlanan sinyalleri atla
+    if (irValue != 0 && irValue != 0xFFFFFFFF && !isDuplicate(irValue) && isStrongSignal(irValue)) {
+      // Sinyali kaydet
+      irReadings[readingIndex] = irValue;
+      readingIndex = (readingIndex + 1) % maxReadings;
+    }
+    IrReceiver.resume();
+  }
+
+  // Encoder kontrolü
+  int currentState = digitalRead(ENCODER_CLK);
+  if (currentState != lastEncoderState) {
+    if (digitalRead(ENCODER_DT) != currentState) {
+      selectedSignal++;
+      if (selectedSignal >= maxReadings) selectedSignal = 0;
+    } else {
+      selectedSignal--;
+      if (selectedSignal < 0) selectedSignal = maxReadings - 1;
+    }
+    showSignalList();
+  }
+  lastEncoderState = currentState;
+
+  // Encoder tuşuna basıldığında seçili sinyal gönder
+  if (digitalRead(ENCODER_SW) == LOW && irReadings[selectedSignal] != 0) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("Sinyal Gonderiliyor...");
+    display.display();
+    IrSender.sendNEC(irReadings[selectedSignal], 32, true); // TRUE ekledik
+    delay(1000);
+    showSignalList();
+  }
+
+  delay(100);
+}
