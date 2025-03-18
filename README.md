@@ -1,1 +1,0 @@
-# irsinyal.txt
